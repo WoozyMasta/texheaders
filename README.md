@@ -84,6 +84,15 @@ Builder stores `TextureEntry.PAAFile` as normalized relative path:
 * lowercase by default;
 * backslash separators by default.
 
+## Build Parallelism
+
+`BuildOptions.Workers` controls build parallelism:
+
+* `0` or `1`: serial build (default, no worker overhead);
+* `>1`: explicit worker count;
+* `texheaders.WorkersAuto` (`-1`): auto mode based on `GOMAXPROCS/4`,
+  rounded down to nearest power of two and capped by input file count.
+
 ## Known Unsupported
 
 * `.pac` source input is currently not supported (`ErrPACUnsupported`).

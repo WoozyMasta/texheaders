@@ -14,8 +14,9 @@ import (
 
 // decoder is a reusable little-endian reader with shared scratch buffer.
 type decoder struct {
-	r   io.Reader
-	tmp [8]byte
+	r     io.Reader
+	byteR io.ByteReader
+	tmp   [8]byte
 }
 
 // ReadFile decodes texHeaders.bin from file path.
@@ -40,6 +41,9 @@ func ReadFile(path string) (*File, error) {
 // Read decodes texHeaders.bin from stream.
 func Read(r io.Reader) (*File, error) {
 	d := decoder{r: r}
+	if br, ok := r.(io.ByteReader); ok {
+		d.byteR = br
+	}
 
 	if _, err := io.ReadFull(d.r, d.tmp[:4]); err != nil {
 		return nil, fmt.Errorf("read magic: %w", err)
@@ -67,7 +71,7 @@ func Read(r io.Reader) (*File, error) {
 	file := &File{
 		Magic:    magic,
 		Version:  version,
-		Textures: make([]TextureEntry, 0, textureCount),
+		Textures: make([]TextureEntry, textureCount),
 	}
 
 	for i := range textureCount {
@@ -76,7 +80,7 @@ func Read(r io.Reader) (*File, error) {
 			return nil, fmt.Errorf("read texture entry %d: %w", i, entryErr)
 		}
 
-		file.Textures = append(file.Textures, entry)
+		file.Textures[i] = entry
 	}
 
 	return file, nil
@@ -189,7 +193,7 @@ func (d *decoder) readTextureEntry() (TextureEntry, error) {
 	}
 
 	entry.MipMapCountCopy = mipCountCopy
-	entry.MipMaps = make([]MipMap, 0, mipCountCopy)
+	entry.MipMaps = make([]MipMap, mipCountCopy)
 
 	for i := range mipCountCopy {
 		m, mipErr := d.readMipMap()
@@ -197,7 +201,7 @@ func (d *decoder) readTextureEntry() (TextureEntry, error) {
 			return entry, fmt.Errorf("read mipmap %d: %w", i, mipErr)
 		}
 
-		entry.MipMaps = append(entry.MipMaps, m)
+		entry.MipMaps[i] = m
 	}
 
 	paxFileSize, err := d.readU32()
@@ -262,10 +266,10 @@ func (d *decoder) readMipMap() (MipMap, error) {
 // readASCIIZ reads zero-terminated UTF-8/byte string.
 func (d *decoder) readASCIIZ() (string, error) {
 	buf := make([]byte, 0, 64)
-	var tmp [1]byte
 
 	for {
-		if _, err := io.ReadFull(d.r, tmp[:]); err != nil {
+		b, err := d.readU8()
+		if err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				return "", ErrInvalidASCIIZ
 			}
@@ -273,7 +277,6 @@ func (d *decoder) readASCIIZ() (string, error) {
 			return "", err
 		}
 
-		b := tmp[0]
 		if b == 0 {
 			return string(buf), nil
 		}
@@ -282,7 +285,17 @@ func (d *decoder) readASCIIZ() (string, error) {
 	}
 }
 
+// readU8 reads one byte as uint8.
 func (d *decoder) readU8() (uint8, error) {
+	if d.byteR != nil {
+		v, err := d.byteR.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+
+		return v, nil
+	}
+
 	if _, err := io.ReadFull(d.r, d.tmp[:1]); err != nil {
 		return 0, err
 	}
@@ -290,6 +303,7 @@ func (d *decoder) readU8() (uint8, error) {
 	return d.tmp[0], nil
 }
 
+// readBool8 reads one byte and maps it to bool.
 func (d *decoder) readBool8() (bool, error) {
 	v, err := d.readU8()
 	if err != nil {
@@ -299,6 +313,7 @@ func (d *decoder) readBool8() (bool, error) {
 	return v != 0, nil
 }
 
+// readU16 reads little-endian uint16.
 func (d *decoder) readU16() (uint16, error) {
 	if _, err := io.ReadFull(d.r, d.tmp[:2]); err != nil {
 		return 0, err
@@ -307,6 +322,7 @@ func (d *decoder) readU16() (uint16, error) {
 	return binary.LittleEndian.Uint16(d.tmp[:2]), nil
 }
 
+// readU32 reads little-endian uint32.
 func (d *decoder) readU32() (uint32, error) {
 	if _, err := io.ReadFull(d.r, d.tmp[:4]); err != nil {
 		return 0, err
@@ -315,6 +331,7 @@ func (d *decoder) readU32() (uint32, error) {
 	return binary.LittleEndian.Uint32(d.tmp[:4]), nil
 }
 
+// readF32 reads little-endian IEEE754 float32.
 func (d *decoder) readF32() (float32, error) {
 	u, err := d.readU32()
 	if err != nil {

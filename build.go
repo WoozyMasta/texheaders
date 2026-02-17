@@ -5,18 +5,21 @@
 package texheaders
 
 import (
-	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/woozymasta/paa"
 )
+
+// WorkersAuto enables automatic worker selection for BuildOptions.Workers.
+const WorkersAuto = -1
 
 // BuildOptions controls builder behavior.
 type BuildOptions struct {
@@ -31,19 +34,27 @@ type BuildOptions struct {
 	LowercasePaths bool `json:"lowercase_paths,omitempty" yaml:"lowercase_paths,omitempty"`
 	// BackslashPaths stores entry paths with backslash separators.
 	BackslashPaths bool `json:"backslash_paths,omitempty" yaml:"backslash_paths,omitempty"`
+	// Workers controls parallelism in Build.
+	//  - Workers <= 1 disables parallel build (default, no worker overhead).
+	//  - Workers == WorkersAuto selects workers automatically from host CPU count.
+	//  - Workers > 1 enables parallel entry build with that worker count.
+	Workers int `json:"workers,omitempty" yaml:"workers,omitempty"`
 }
 
 // BuildIssue reports one skipped input in lenient mode.
 type BuildIssue struct {
-	Path  string `json:"path,omitempty" yaml:"path,omitempty"`
+	// Path is the path of the skipped input.
+	Path string `json:"path,omitempty" yaml:"path,omitempty"`
+	// Error is the error message of the skipped input.
 	Error string `json:"error,omitempty" yaml:"error,omitempty"`
 }
 
 // Builder builds texheaders file from source texture files.
 type Builder struct {
-	opts   BuildOptions
-	inputs []string
-	issues []BuildIssue
+	inputs       []string     // inputs is the list of source texture paths.
+	issues       []BuildIssue // issues is the list of skipped inputs.
+	opts         BuildOptions // opts is the builder options.
+	inputsSorted bool         // inputsSorted tracks whether inputs are already sorted lexicographically.
 }
 
 // NewBuilder creates a new builder with options.
@@ -59,14 +70,20 @@ func NewBuilder(opts BuildOptions) *Builder {
 	return &Builder{
 		opts:   opts,
 		inputs: make([]string, 0, 16),
-		issues: make([]BuildIssue, 0),
+		// Empty or append-increasing input is already sorted.
+		inputsSorted: true,
+		issues:       make([]BuildIssue, 0),
 	}
 }
 
 // Append registers one source texture path for build.
 func (b *Builder) Append(path string) error {
 	if strings.TrimSpace(path) == "" {
-		return errors.New("empty input path")
+		return ErrEmptyInputPath
+	}
+
+	if b.inputsSorted && len(b.inputs) > 0 && b.inputs[len(b.inputs)-1] > path {
+		b.inputsSorted = false
 	}
 
 	b.inputs = append(b.inputs, path)
@@ -100,7 +117,11 @@ func (b *Builder) Issues() []BuildIssue {
 
 // Build compiles appended source files into texheaders model.
 func (b *Builder) Build() (*File, error) {
-	sort.Strings(b.inputs)
+	if !b.inputsSorted {
+		sort.Strings(b.inputs)
+		b.inputsSorted = true
+	}
+
 	b.issues = b.issues[:0]
 
 	file := &File{
@@ -109,21 +130,81 @@ func (b *Builder) Build() (*File, error) {
 		Textures: make([]TextureEntry, 0, len(b.inputs)),
 	}
 
-	for _, in := range b.inputs {
-		entry, err := b.buildEntry(in)
-		if err != nil {
-			if b.opts.SkipInvalid {
-				b.issues = append(b.issues, BuildIssue{
-					Path:  in,
-					Error: err.Error(),
-				})
-				continue
+	if len(b.inputs) == 0 {
+		return file, nil
+	}
+
+	workers := resolveBuildWorkers(b.opts.Workers, len(b.inputs))
+
+	// Handle serial build.
+	if workers <= 1 {
+		for _, in := range b.inputs {
+			entry, err := b.buildEntry(in)
+			if err != nil {
+				if b.opts.SkipInvalid {
+					b.issues = append(b.issues, BuildIssue{
+						Path:  in,
+						Error: err.Error(),
+					})
+					continue
+				}
+
+				return nil, fmt.Errorf("build %q: %w", in, err)
 			}
 
-			return nil, fmt.Errorf("build %q: %w", in, err)
+			file.Textures = append(file.Textures, entry)
 		}
 
-		file.Textures = append(file.Textures, entry)
+		return file, nil
+	}
+	if workers > len(b.inputs) {
+		workers = len(b.inputs)
+	}
+
+	// Initialize result arrays.
+	entries := make([]TextureEntry, len(b.inputs))
+	errs := make([]error, len(b.inputs))
+	jobs := make(chan int, len(b.inputs))
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				entry, err := b.buildEntry(b.inputs[i])
+				if err != nil {
+					errs[i] = err
+					continue
+				}
+
+				entries[i] = entry
+			}
+		}()
+	}
+
+	// Dispatch jobs to workers.
+	for i := range b.inputs {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	// Collect results from workers.
+	for i, in := range b.inputs {
+		if errs[i] == nil {
+			file.Textures = append(file.Textures, entries[i])
+			continue
+		}
+
+		if b.opts.SkipInvalid {
+			b.issues = append(b.issues, BuildIssue{
+				Path:  in,
+				Error: errs[i].Error(),
+			})
+			continue
+		}
+
+		return nil, fmt.Errorf("build %q: %w", in, errs[i])
 	}
 
 	return file, nil
@@ -184,7 +265,7 @@ func (b *Builder) buildEntry(path string) (TextureEntry, error) {
 		return entry, fmt.Errorf("stat source: %w", err)
 	}
 
-	meta, err := paa.DecodeMetadata(fh)
+	meta, err := paa.DecodeMetadataHeaders(fh)
 	if err != nil {
 		return entry, fmt.Errorf("scan paa metadata: %w", err)
 	}
@@ -209,8 +290,8 @@ func (b *Builder) buildEntry(path string) (TextureEntry, error) {
 		return entry, err
 	}
 
-	assignColorTags(&entry, meta.Taggs)
-	assignFlagTag(&entry, meta.Taggs)
+	assignColorHeaders(&entry, meta)
+	assignFlagHeaders(&entry, meta)
 	if err = assignMipmaps(&entry, meta.MipHeaders, paxFormat); err != nil {
 		return entry, err
 	}
@@ -265,16 +346,14 @@ func (b *Builder) normalizePath(in string) string {
 	return rel
 }
 
-// assignColorTags maps CGVA/CXAM tags into entry color fields.
-func assignColorTags(entry *TextureEntry, tags map[string][]byte) {
-	avg, ok := tags["CGVA"]
-	if ok && len(avg) >= 4 {
-		copy(entry.AverageColor[:], avg[:4])
+// assignColorHeaders maps PAA header color metadata into entry color fields.
+func assignColorHeaders(entry *TextureEntry, meta *paa.MetadataHeaders) {
+	if meta.HasAverageColor {
+		entry.AverageColor = meta.AverageColor
 	}
 
-	maxTag, ok := tags["CXAM"]
-	if ok && len(maxTag) >= 4 {
-		copy(entry.MaxColor[:], maxTag[:4])
+	if meta.HasMaxColor {
+		entry.MaxColor = meta.MaxColor
 		entry.HasMaxCtagg = true
 	} else {
 		entry.MaxColor = [4]byte{0xFF, 0xFF, 0xFF, 0xFF}
@@ -288,17 +367,16 @@ func assignColorTags(entry *TextureEntry, tags map[string][]byte) {
 	entry.AverageColorF[3] = float32(entry.AverageColor[3]) / 255.0
 }
 
-// assignFlagTag maps GALF flags into alpha booleans.
-func assignFlagTag(entry *TextureEntry, tags map[string][]byte) {
-	flagsRaw, ok := tags["GALF"]
-	if !ok || len(flagsRaw) < 4 {
+// assignFlagHeaders maps GALF metadata flags into alpha booleans.
+func assignFlagHeaders(entry *TextureEntry, meta *paa.MetadataHeaders) {
+	if !meta.HasGALF {
 		entry.IsAlpha = false
 		entry.IsTransparent = false
 		entry.IsAlphaNonOpaque = false
 		return
 	}
 
-	flags := binary.LittleEndian.Uint32(flagsRaw[:4])
+	flags := meta.GALF
 	entry.IsAlpha = (flags & 1) != 0
 	entry.IsTransparent = (flags & 2) != 0
 	entry.IsAlphaNonOpaque = entry.IsAlpha && entry.AverageColor[3] < 0x80
@@ -328,6 +406,45 @@ func assignMipmaps(entry *TextureEntry, mips []paa.MipHeader, paxFormat uint8) e
 	entry.MipMapCountCopy = entry.MipMapCount
 
 	return nil
+}
+
+// resolveBuildWorkers resolves requested worker setting to an effective count.
+func resolveBuildWorkers(requested, fileCount int) int {
+	if fileCount <= 1 {
+		return 1
+	}
+
+	switch {
+	case requested == WorkersAuto:
+		return autoBuildWorkers(fileCount)
+	case requested <= 1:
+		return 1
+	default:
+		return min(requested, fileCount)
+	}
+}
+
+// autoBuildWorkers chooses worker count from CPU parallelism and file count.
+func autoBuildWorkers(fileCount int) int {
+	workers := runtime.GOMAXPROCS(0) / 4
+	workers = max(workers, 2)
+	workers = min(workers, fileCount)
+
+	return floorPow2(workers)
+}
+
+// floorPow2 returns the largest power of two not greater than v.
+func floorPow2(v int) int {
+	if v <= 1 {
+		return 1
+	}
+
+	p := 1
+	for p<<1 <= v {
+		p <<= 1
+	}
+
+	return p
 }
 
 // intToU32Strict safely converts int to uint32 without unsafe cast.

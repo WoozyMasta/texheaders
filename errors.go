@@ -19,6 +19,10 @@ var (
 	ErrUnsupportedInputFormat = errors.New("unsupported input texture format")
 	// ErrPACUnsupported means .pac source support is not implemented yet.
 	ErrPACUnsupported = errors.New(".pac source is not supported")
+	// ErrEmptyInputPath means builder input path is empty or whitespace.
+	ErrEmptyInputPath = errors.New("empty input path")
+	// ErrNilFile means Write received a nil file model.
+	ErrNilFile = errors.New("file is nil")
 	// ErrValidation means semantic model validation failed.
 	ErrValidation = errors.New("texheaders validation failed")
 )

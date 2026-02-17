@@ -2,11 +2,34 @@ package texheaders
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// prepareBuildBenchmarkInputs builds absolute testdata inputs for build benchmarks.
+func prepareBuildBenchmarkInputs(b *testing.B) (baseDir string, inputs []string) {
+	b.Helper()
+
+	fixture, err := ReadFile("testdata/texHeaders.bin")
+	if err != nil {
+		b.Fatalf("ReadFile(testdata/texHeaders.bin) error: %v", err)
+	}
+
+	baseDir, err = filepath.Abs("testdata")
+	if err != nil {
+		b.Fatalf("filepath.Abs(testdata) error: %v", err)
+	}
+
+	inputs = make([]string, 0, len(fixture.Textures))
+	for _, tex := range fixture.Textures {
+		inputs = append(inputs, filepath.Join(baseDir, filepath.FromSlash(strings.ReplaceAll(tex.PAAFile, "\\", "/"))))
+	}
+
+	return baseDir, inputs
+}
 
 func BenchmarkDecodeFixture(b *testing.B) {
 	raw, err := os.ReadFile("testdata/texHeaders.bin")
@@ -47,20 +70,7 @@ func BenchmarkEncodeDecodedFixture(b *testing.B) {
 }
 
 func BenchmarkBuildFromAppendedFiles(b *testing.B) {
-	fixture, err := ReadFile("testdata/texHeaders.bin")
-	if err != nil {
-		b.Fatalf("ReadFile(testdata/texHeaders.bin) error: %v", err)
-	}
-
-	baseDir, err := filepath.Abs("testdata")
-	if err != nil {
-		b.Fatalf("filepath.Abs(testdata) error: %v", err)
-	}
-
-	inputs := make([]string, 0, len(fixture.Textures))
-	for _, tex := range fixture.Textures {
-		inputs = append(inputs, filepath.Join(baseDir, filepath.FromSlash(strings.ReplaceAll(tex.PAAFile, "\\", "/"))))
-	}
+	baseDir, inputs := prepareBuildBenchmarkInputs(b)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -71,13 +81,43 @@ func BenchmarkBuildFromAppendedFiles(b *testing.B) {
 		})
 
 		for _, in := range inputs {
-			if err = builder.Append(in); err != nil {
+			if err := builder.Append(in); err != nil {
 				b.Fatalf("Append(%q) error: %v", in, err)
 			}
 		}
 
-		if _, err = builder.Build(); err != nil {
+		if _, err := builder.Build(); err != nil {
 			b.Fatalf("Build() error: %v", err)
 		}
+	}
+}
+
+func BenchmarkBuildFromAppendedFilesWorkers(b *testing.B) {
+	baseDir, inputs := prepareBuildBenchmarkInputs(b)
+	workerCases := []int{0, 4, 8, 16}
+
+	for _, workers := range workerCases {
+		workers := workers
+		b.Run(fmt.Sprintf("Workers=%d", workers), func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				builder := NewBuilder(BuildOptions{
+					BaseDir:        baseDir,
+					LowercasePaths: true,
+					BackslashPaths: true,
+					Workers:        workers,
+				})
+
+				for _, in := range inputs {
+					if err := builder.Append(in); err != nil {
+						b.Fatalf("Append(%q) error: %v", in, err)
+					}
+				}
+
+				if _, err := builder.Build(); err != nil {
+					b.Fatalf("Build() error: %v", err)
+				}
+			}
+		})
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -159,6 +160,89 @@ func TestBuilder_AppendManyFailFastOnInvalid(t *testing.T) {
 
 	if got[0] != "ok.paa" {
 		t.Fatalf("first input = %q, want %q", got[0], "ok.paa")
+	}
+}
+
+func TestBuilder_ParallelParity(t *testing.T) {
+	t.Parallel()
+
+	wantFile, err := ReadFile("testdata/texHeaders.bin")
+	if err != nil {
+		t.Fatalf("ReadFile(testdata/texHeaders.bin) error: %v", err)
+	}
+
+	baseDir, err := filepath.Abs("testdata")
+	if err != nil {
+		t.Fatalf("filepath.Abs(testdata) error: %v", err)
+	}
+
+	serial := NewBuilder(BuildOptions{
+		BaseDir:        baseDir,
+		LowercasePaths: true,
+		BackslashPaths: true,
+		Workers:        1,
+	})
+	parallel := NewBuilder(BuildOptions{
+		BaseDir:        baseDir,
+		LowercasePaths: true,
+		BackslashPaths: true,
+		Workers:        4,
+	})
+
+	for _, tex := range wantFile.Textures {
+		absPath := filepath.Join(baseDir, stringsFromBackslashes(tex.PAAFile))
+		if err = serial.Append(absPath); err != nil {
+			t.Fatalf("serial Append(%q) error: %v", absPath, err)
+		}
+		if err = parallel.Append(absPath); err != nil {
+			t.Fatalf("parallel Append(%q) error: %v", absPath, err)
+		}
+	}
+
+	serialOut, err := serial.Build()
+	if err != nil {
+		t.Fatalf("serial Build() error: %v", err)
+	}
+	parallelOut, err := parallel.Build()
+	if err != nil {
+		t.Fatalf("parallel Build() error: %v", err)
+	}
+
+	if len(serialOut.Textures) != len(parallelOut.Textures) {
+		t.Fatalf("textures length mismatch: serial=%d parallel=%d", len(serialOut.Textures), len(parallelOut.Textures))
+	}
+
+	for i := range serialOut.Textures {
+		if err = assertEntryEqual(serialOut.Textures[i].PAAFile, serialOut.Textures[i], parallelOut.Textures[i]); err != nil {
+			t.Fatalf("parallel parity mismatch: %v", err)
+		}
+	}
+}
+
+func TestResolveBuildWorkers(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(0)
+	runtime.GOMAXPROCS(20)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	tests := []struct {
+		name      string
+		requested int
+		fileCount int
+		want      int
+	}{
+		{name: "default serial", requested: 0, fileCount: 100, want: 1},
+		{name: "explicit serial", requested: 1, fileCount: 100, want: 1},
+		{name: "explicit cap by files", requested: 8, fileCount: 3, want: 3},
+		{name: "auto large set", requested: WorkersAuto, fileCount: 100, want: 4}, // 20/4=5 -> floorPow2=4
+		{name: "auto small set", requested: WorkersAuto, fileCount: 3, want: 2},
+		{name: "single file always serial", requested: WorkersAuto, fileCount: 1, want: 1},
+	}
+
+	for _, tt := range tests {
+		got := resolveBuildWorkers(tt.requested, tt.fileCount)
+		if got != tt.want {
+			t.Fatalf("%s: resolveBuildWorkers(%d, %d)=%d, want %d", tt.name, tt.requested, tt.fileCount, got, tt.want)
+		}
 	}
 }
 

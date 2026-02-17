@@ -6,7 +6,6 @@ package texheaders
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -15,8 +14,9 @@ import (
 
 // encoder is a reusable little-endian writer with shared scratch buffer.
 type encoder struct {
-	w   io.Writer
-	tmp [8]byte
+	w    io.Writer
+	strW io.StringWriter
+	tmp  [8]byte
 }
 
 // WriteFile encodes texHeaders.bin into file path.
@@ -40,10 +40,13 @@ func WriteFile(path string, f *File) error {
 // Write encodes texHeaders.bin into stream.
 func Write(w io.Writer, f *File) error {
 	if f == nil {
-		return errors.New("file is nil")
+		return ErrNilFile
 	}
 
 	e := encoder{w: w}
+	if sw, ok := w.(io.StringWriter); ok {
+		e.strW = sw
+	}
 
 	magic := f.Magic
 	if magic == "" {
@@ -54,7 +57,7 @@ func Write(w io.Writer, f *File) error {
 		return fmt.Errorf("%w: got %q", ErrInvalidMagic, magic)
 	}
 
-	if _, err := e.w.Write([]byte(magic)); err != nil {
+	if err := e.writeString(magic); err != nil {
 		return fmt.Errorf("write magic: %w", err)
 	}
 
@@ -204,7 +207,7 @@ func (e *encoder) writeMipMap(m *MipMap) error {
 
 // writeASCIIZ writes zero-terminated string.
 func (e *encoder) writeASCIIZ(s string) error {
-	if _, err := e.w.Write([]byte(s)); err != nil {
+	if err := e.writeString(s); err != nil {
 		return err
 	}
 
@@ -215,12 +218,31 @@ func (e *encoder) writeASCIIZ(s string) error {
 	return nil
 }
 
+// writeString writes plain string bytes.
+func (e *encoder) writeString(s string) error {
+	if e.strW != nil {
+		if _, err := e.strW.WriteString(s); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	if _, err := e.w.Write([]byte(s)); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// writeU8 writes one byte.
 func (e *encoder) writeU8(v uint8) error {
 	e.tmp[0] = v
 	_, err := e.w.Write(e.tmp[:1])
 	return err
 }
 
+// writeBool8 writes bool as one byte (0 or 1).
 func (e *encoder) writeBool8(v bool) error {
 	if v {
 		return e.writeU8(1)
@@ -229,18 +251,21 @@ func (e *encoder) writeBool8(v bool) error {
 	return e.writeU8(0)
 }
 
+// writeU16 writes little-endian uint16.
 func (e *encoder) writeU16(v uint16) error {
 	binary.LittleEndian.PutUint16(e.tmp[:2], v)
 	_, err := e.w.Write(e.tmp[:2])
 	return err
 }
 
+// writeU32 writes little-endian uint32.
 func (e *encoder) writeU32(v uint32) error {
 	binary.LittleEndian.PutUint32(e.tmp[:4], v)
 	_, err := e.w.Write(e.tmp[:4])
 	return err
 }
 
+// writeF32 writes little-endian IEEE754 float32.
 func (e *encoder) writeF32(v float32) error {
 	return e.writeU32(math.Float32bits(v))
 }
