@@ -20,12 +20,10 @@ and this project adheres to [Semantic Versioning][].
 
 ### Changed
 
-* Updated `github.com/woozymasta/paa` to `v0.2.2`.
-  `paa v0.2.2` also brought faster metadata paths and convenient APIs
-  (`DecodeMetadataHeaders`, `DecodeMetadataHeadersBytes`,
-  `EncodeWithOptionsAndMetadataHeaders`) used by texheaders build flow.
-* Build pipeline now reads PAA metadata via
-  `paa.DecodeMetadataHeaders` (header-only path) instead of full tag map.
+* Updated `github.com/woozymasta/paa` to `v0.2.2`, which is faster overall
+  (including encode/decode and metadata paths).
+* Build pipeline now uses `paa` header-only metadata API
+  (`DecodeMetadataHeaders`) instead of full tag-map metadata decode.
 * Builder internals now avoid unnecessary re-sorting when appended inputs are
   already ordered.
 * Decode/encode internals reduced append growth in fixed-size slices
