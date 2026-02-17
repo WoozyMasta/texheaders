@@ -2,7 +2,7 @@ module github.com/woozymasta/texheaders
 
 go 1.25.5
 
-require github.com/woozymasta/paa v0.2.1
+require github.com/woozymasta/paa v0.2.2
 
 require (
 	github.com/woozymasta/bcn v0.1.5 // indirect
