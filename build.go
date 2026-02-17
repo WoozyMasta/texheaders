@@ -1,7 +1,12 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 WoozyMasta
+// Source: github.com/woozymasta/texheaders
+
 package texheaders
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -61,7 +66,7 @@ func NewBuilder(opts BuildOptions) *Builder {
 // Append registers one source texture path for build.
 func (b *Builder) Append(path string) error {
 	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("empty input path")
+		return errors.New("empty input path")
 	}
 
 	b.inputs = append(b.inputs, path)
@@ -331,14 +336,7 @@ func intToU32Strict(v int) (uint32, error) {
 		return 0, fmt.Errorf("value out of uint32 range: %d", v)
 	}
 
-	buf := [4]byte{
-		byte(v),
-		byte(v >> 8),
-		byte(v >> 16),
-		byte(v >> 24),
-	}
-
-	return binary.LittleEndian.Uint32(buf[:]), nil
+	return uint32(v), nil
 }
 
 // int64ToU32Strict safely converts int64 to uint32 without unsafe cast.
@@ -347,14 +345,7 @@ func int64ToU32Strict(v int64) (uint32, error) {
 		return 0, fmt.Errorf("value out of uint32 range: %d", v)
 	}
 
-	buf := [4]byte{
-		byte(v),
-		byte(v >> 8),
-		byte(v >> 16),
-		byte(v >> 24),
-	}
-
-	return binary.LittleEndian.Uint32(buf[:]), nil
+	return uint32(v), nil
 }
 
 // paxTypeToU8 maps known paa pax types to uint8 texheaders format field.

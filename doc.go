@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 WoozyMasta
+// Source: github.com/woozymasta/texheaders
+
 /*
 Package texheaders reads and writes DayZ/Arma texHeaders.bin files.
 

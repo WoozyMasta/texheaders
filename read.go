@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 WoozyMasta
+// Source: github.com/woozymasta/texheaders
+
 package texheaders
 
 import (
@@ -66,7 +70,7 @@ func Read(r io.Reader) (*File, error) {
 		Textures: make([]TextureEntry, 0, textureCount),
 	}
 
-	for i := uint32(0); i < textureCount; i++ {
+	for i := range textureCount {
 		entry, entryErr := d.readTextureEntry()
 		if entryErr != nil {
 			return nil, fmt.Errorf("read texture entry %d: %w", i, entryErr)
@@ -187,7 +191,7 @@ func (d *decoder) readTextureEntry() (TextureEntry, error) {
 	entry.MipMapCountCopy = mipCountCopy
 	entry.MipMaps = make([]MipMap, 0, mipCountCopy)
 
-	for i := uint32(0); i < mipCountCopy; i++ {
+	for i := range mipCountCopy {
 		m, mipErr := d.readMipMap()
 		if mipErr != nil {
 			return entry, fmt.Errorf("read mipmap %d: %w", i, mipErr)

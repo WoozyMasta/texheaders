@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 WoozyMasta
+// Source: github.com/woozymasta/texheaders
+
 package texheaders
 
 import (
@@ -89,7 +93,7 @@ func ValidateEntry(entry *TextureEntry, entryIndex int) error {
 			issues = append(issues, fmt.Errorf("%w: %s.always_three=%d want=3", ErrValidation, mp, m.AlwaysThree))
 		}
 
-		if entry.PaxFormat <= math.MaxUint8 && m.PaxFormat != uint8(entry.PaxFormat) {
+		if entry.PaxFormat <= math.MaxUint8 && uint32(m.PaxFormat) != entry.PaxFormat {
 			issues = append(issues, fmt.Errorf("%w: %s.pax_format=%d entry.pax_format=%d", ErrValidation, mp, m.PaxFormat, entry.PaxFormat))
 		}
 

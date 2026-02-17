@@ -1,7 +1,12 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 WoozyMasta
+// Source: github.com/woozymasta/texheaders
+
 package texheaders
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -35,7 +40,7 @@ func WriteFile(path string, f *File) error {
 // Write encodes texHeaders.bin into stream.
 func Write(w io.Writer, f *File) error {
 	if f == nil {
-		return fmt.Errorf("file is nil")
+		return errors.New("file is nil")
 	}
 
 	e := encoder{w: w}
@@ -242,18 +247,10 @@ func (e *encoder) writeF32(v float32) error {
 
 // writeU32FromInt writes a uint32 field from int with strict bounds check.
 func (e *encoder) writeU32FromInt(v int) error {
-	if v < 0 || uint64(v) > math.MaxUint32 {
+	u32, err := intToU32Strict(v)
+	if err != nil {
 		return fmt.Errorf("%w: %d", ErrTooManyTextures, v)
 	}
 
-	e.tmp[0] = byte(v)
-	e.tmp[1] = byte(v >> 8)
-	e.tmp[2] = byte(v >> 16)
-	e.tmp[3] = byte(v >> 24)
-
-	if _, err := e.w.Write(e.tmp[:4]); err != nil {
-		return err
-	}
-
-	return nil
+	return e.writeU32(u32)
 }
