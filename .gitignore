@@ -190,3 +190,5 @@ $RECYCLE.BIN/
 .gocache/
 .golangci-cache/
 *.pbo
+bench_*.txt
+*.pprof
